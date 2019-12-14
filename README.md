@@ -1,6 +1,6 @@
 # LightTickChart
 
-TradingView/lightweight-chartshttps://github.com/tradingview/lightweight-charts)を使用したbitFlyer FXのTickチャート
+TradingView/lightweight-charts(https://github.com/tradingview/lightweight-charts)を使用したbitFlyer FXのTickチャート
 https://ros522.github.io/LightTickChart
 
 # Feature
