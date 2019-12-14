@@ -1,0 +1,300 @@
+<html>
+<head>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/core.js" integrity="sha256-wPN6ojtZcdUXfbQ+nxh6Zm7xh1pOWxEbuE9EIa1P7BY=" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/sha256.js" integrity="sha256-2AdPI8vSeqbC8jG4va00u9jUnH5H/6DXzQeixNHTx5g=" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/hmac.min.js" integrity="sha256-egwF2x9ZneCwHP+C7Ju1K1Nfd2ntIX/X1KY6Dwioki4=" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/hmac-sha256.min.js" integrity="sha256-1Gusk8p9CX01j8sefIYUiC7gBoAryX7+YUUU3iIOvts=" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/decimal.js/10.2.0/decimal.min.js" integrity="sha256-6dOFvNWbRWo2Kh1ywCc+9VOZghBT/y5RwRLdX8ETXr0=" crossorigin="anonymous"></script>
+
+</head>
+
+<script>
+
+class BitFlyerHFTChart {
+    constructor(){
+        const self = this
+        this.exchange = new BitFlyerExchange()
+        this.dom = document.body;
+        this.chart = LightweightCharts.createChart(this.dom, 
+        {
+            width: self.dom.clientWidth,
+            height: self.dom.clientHeight,
+            localization: {
+                locale: 'ja-JP',
+            },
+            layout: {
+                backgroundColor : '#12151A'
+            },
+            grid: {
+                vertLines: {
+                    color: 'rgba(180, 180, 180, 0.3)',
+                    style: 1,
+                    visible: true,
+                },
+                horzLines: {
+                    color: 'rgba(180, 180, 180, 0.3)',
+                    style: 1,
+                    visible: true,
+                },
+            },
+        });
+        this.my_exec_series = this.chart.addLineSeries({
+            lineWidth : 0,
+            color : 'rgba(0,0,0,0)',
+        })
+        this.sell_series = this.chart.addLineSeries(
+            {
+                lineWidth : 2,
+                color : '#E54F6B',
+                scaleMargins: {
+                    top: 0,
+                    bottom: 0.8,
+                },
+            }
+        );
+        this.buy_series = this.chart.addLineSeries(
+            {
+                lineWidth : 2,
+                color : '#4BA375',
+                scaleMargins: {
+                    top: 0,
+                    bottom: 0.8,
+                },
+            }
+        );
+        this.sell_vol = this.chart.addHistogramSeries(
+            {
+                overlay: true,
+                color : 'rgba(229,79,106,0.5)',
+                scaleMargins: {
+                    top: 0.8,
+                    bottom: 0,
+                },
+            }
+        );
+        this.buy_vol = this.chart.addHistogramSeries(
+            {
+                overlay: true,
+                color : 'rgba(75,179,116,0.5)',
+                scaleMargins: {
+                    top: 0.8,
+                    bottom: 0,
+                },
+            }
+        );
+        this.chart.applyOptions({
+            timeScale: {
+                rightOffset: 12,
+                barSpacing: 3,
+                visible: true,
+                timeVisible: true,
+                secondsVisible: true,
+            },
+        });
+
+        this.markers = []
+        this.orders_line = {}
+        // resize to window size
+        window.onresize = function(){
+            self.chart.resize( self.dom.clientHeight, self.dom.clientWidth)
+        }
+        // control private ch enable button
+        document.getElementById('enable_private_ch').onclick = function(){
+            const api_key = document.getElementById('key').value
+            const secret = document.getElementById('secret').value
+
+            self.exchange.enable_private_ch(api_key,secret)
+        }
+    }
+
+    bftimetojst(exec_date){
+        const d = new Date(exec_date);
+        const t = d.getTime() / 1000 - d.getTimezoneOffset()*60 // UTC to JST
+        return t
+    }
+    
+    create(){
+        const self = this
+        this.exchange.onexecution = function(m){
+            const t = self.bftimetojst(m.exec_date)
+            if (m.side == 'BUY'){
+                self.buy_series.update({time: t,value: m.price});  
+                self.buy_vol.update({time: t,value: m.size})
+            }
+            if (m.side == 'SELL') {
+                self.sell_series.update({time: t,value: m.price});  
+                self.sell_vol.update({time: t,value: m.size})
+            }
+        }
+        this.exchange.onorder = function(m){
+            // Mark New Order
+            if(m.side == "BUY"){
+                self.orders_line[m.child_order_id] = self.my_exec_series.createPriceLine({color:'#4BA375',price: m.price,outbound_size:new Decimal(m.size),lineStyle: LightweightCharts.LineStyle.LargeDashed}); 
+            }
+            if(m.side == "SELL")
+            {
+                self.orders_line[m.child_order_id] = self.my_exec_series.createPriceLine({color:'#E54F6B',price: m.price,outbound_size:new Decimal(m.size),lineStyle: LightweightCharts.LineStyle.LargeDashed}); 
+            }
+        }
+        this.exchange.oncancel = function(m){
+            // Cancel Order
+            if( m.child_order_id in self.orders_line ){
+                self.my_exec_series.removePriceLine( self.orders_line[m.child_order_id] )
+                delete self.orders_line[ m.child_order_id ]
+                console.log("remove",m.child_order_id)
+            }
+        }
+        
+        this.exchange.onmyexecution = function(m){
+            // Order Executed
+            const t = self.bftimetojst(m.event_date)
+            self.my_exec_series.update({time: t,value: m.price});  
+
+            // Execution completed check
+            if (m.child_order_id in self.orders_line){
+                self.orders_line[m.child_order_id].ii.K.outbound_size = self.orders_line[m.child_order_id].ii.K.outbound_size.sub( new Decimal(m.size) )
+                if( self.orders_line[m.child_order_id].ii.K.outbound_size.equals( new Decimal(0) )){
+                    // completed
+                    self.my_exec_series.removePriceLine( self.orders_line[m.child_order_id] )
+                    delete self.orders_line[ m.child_order_id ]
+                    console.log("completed remove",m.child_order_id)
+                }
+            }
+            if(m.side == "BUY"){
+                self.markers.push({time:t,position:'belowBar',color:'#6EFF3C', shape:'arrowUp', id:m.child_order_id})
+            }
+            else if(m.side == "SELL")
+            {
+                self.markers.push({time:t,position:'belowBar',color:'#FA223E', shape:'arrowDown', id:m.child_order_id})
+            }
+            self.my_exec_series.setMarkers(self.markers); 
+        }
+        this.exchange.run()
+    }
+}
+class BitFlyerExchange {
+    constructor(){
+        this.mid_price = 0
+        this.asks = []
+        this.bids = []
+
+        this.onboard = null
+        this.onexecution = null
+        this.api_key = ''
+        this.secret = ''
+    }
+
+    get_auth_params(api_key,secret) {
+        const now = Date.now();
+        const nonce = btoa(Math.random()).substring(0, 16);
+        const sign = CryptoJS.HmacSHA256(`${now}${nonce}`,secret).toString(CryptoJS.enc.Hex);
+        return {
+            api_key: api_key,
+            timestamp: now,
+            nonce: nonce,
+            signature: sign
+        };
+    }
+
+    run(){
+        const self = this
+        this.socket = new WebSocket("wss://ws.lightstream.bitflyer.com/json-rpc");
+        const subscribe = function(){
+            self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_board_snapshot_FX_BTC_JPY'}}))
+            self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_board_FX_BTC_JPY'}}))
+            self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_executions_FX_BTC_JPY'}}))
+        }
+        this.socket.onopen = function() {
+            subscribe()
+            if(self.api_key && self.secret)
+                self.enable_private_ch(self.api_key,self.secret)
+        };
+        this.socket.onmessage = function(e) {
+            const data = JSON.parse(e.data)
+            if( 'id' in data ){
+                // auth response id == 1
+                console.log("AUTH RESPONSE",data)
+                if( data.result )
+                    self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'child_order_events'}}))
+                subscribe()
+            }
+            else
+            {
+                self.on_receive_message(JSON.parse(e.data).params);
+            }
+        }
+    }
+    
+    enable_private_ch(key,secret){
+        if(this.socket)
+            this.socket.send( JSON.stringify({id:1,method:"auth",params:this.get_auth_params(key,secret)}))
+    }
+
+    on_receive_message(f){
+        const self = this
+        const m = f.message;
+        switch(f.channel){
+            case "child_order_events":
+                m.forEach(
+                    function(e){
+                        switch(e.event_type){
+                            case "ORDER":
+                                if(self.onorder) self.onorder(e);
+                                break
+                            case "CANCEL":
+                            case "EXPIRE":
+                                if(self.oncancel) self.oncancel(e);
+                                break
+                            case "CANCEL_FAILED":
+                            case "ORDER_FAILED":
+                                if(self.onfail) self.onfail(e);
+                                break
+                            case "EXECUTION":
+                                if(self.onmyexecution) self.onmyexecution(e);
+                                break
+                        }
+                    }
+                )
+                break;
+            case "lightning_board_FX_BTC_JPY":
+                this.mid_price = m.mid_price
+                m.bids.forEach( function(b){self.bids[b.price]=b.size;})
+                m.asks.forEach( function(b){self.asks[b.price]=b.size;})
+                if(this.onboard) this.onboard(m);
+                break;
+            case "lightning_executions_FX_BTC_JPY":
+                m.forEach(
+                    function(e){
+                        if(self.onexecution) self.onexecution(e);
+                    }
+                )
+                break;
+        }
+        
+    }
+}
+
+window.onload = function(){
+    const chart = new BitFlyerHFTChart()
+    chart.create()
+
+    window.chart = chart
+}
+</script>
+
+<body style='margin :0'>
+<div id='chart'>
+</div>
+<div id='setting' style='position: absolute;z-index: 1000'>
+    <details style="color:#FFFFFF;background-color:rgba(255,255,255,0.1);padding:5px">
+        <summary>Setting</summary>
+        <form>
+            <input type='text' id='key' style='background-color:transparent;color:#FFFFFF;border:0' placeholder="API KEY"></input>
+            <input type='text' id='secret' style='background-color:transparent;color:#FFFFFF;border:0' placeholder="SECRET"></input>
+            <input type='button' id='enable_private_ch' value='enable' />
+        </form>
+    </details>
+</div>
+</body>
+</html>
