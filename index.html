@@ -43,10 +43,27 @@ class BitFlyerHFTChart {
             lineWidth : 0,
             color : 'rgba(0,0,0,0)',
         })
-        this.sell_series = this.chart.addLineSeries(
+        this.bid_series = this.chart.addLineSeries(
             {
-                lineWidth : 2,
+                lineWidth : 1,
+                lineStyle: LightweightCharts.LineStyle.Dotted,
+                lastValueVisible: false,
+                priceLineVisible: false,
                 color : '#E54F6B',
+                scaleMargins: {
+                    top: 0,
+                    bottom: 0.8,
+                },
+            }
+        );
+        
+        this.ask_series = this.chart.addLineSeries(
+            {
+                lineWidth : 1,
+                lineStyle: LightweightCharts.LineStyle.Dotted,
+                lastValueVisible: false,
+                priceLineVisible: false,
+                color : '#4BA375',
                 scaleMargins: {
                     top: 0,
                     bottom: 0.8,
@@ -63,9 +80,23 @@ class BitFlyerHFTChart {
                 },
             }
         );
+
+        this.sell_series = this.chart.addLineSeries(
+            {
+                lineWidth : 2,
+                color : '#E54F6B',
+                scaleMargins: {
+                    top: 0,
+                    bottom: 0.8,
+                },
+            }
+        );
+
         this.sell_vol = this.chart.addHistogramSeries(
             {
                 overlay: true,
+                lastValueVisible: false,
+                priceLineVisible: false,
                 color : 'rgba(229,79,106,0.5)',
                 scaleMargins: {
                     top: 0.8,
@@ -76,6 +107,8 @@ class BitFlyerHFTChart {
         this.buy_vol = this.chart.addHistogramSeries(
             {
                 overlay: true,
+                lastValueVisible: false,
+                priceLineVisible: false,
                 color : 'rgba(75,179,116,0.5)',
                 scaleMargins: {
                     top: 0.8,
@@ -103,9 +136,56 @@ class BitFlyerHFTChart {
         document.getElementById('enable_private_ch').onclick = function(){
             const api_key = document.getElementById('key').value
             const secret = document.getElementById('secret').value
-
             self.exchange.enable_private_ch(api_key,secret)
         }
+        
+        // control realtime button
+        document.getElementById('realtime').onclick = function(){
+            self.chart.timeScale().scrollToRealTime();
+        }
+
+        // subscribe crosshair
+        self.chart.subscribeCrosshairMove(function(param){
+            //document.getElementById('time').innerText = new Date(param.time*1000)
+            const buy_price = param.seriesPrices.get(self.buy_series)
+            const buy_vol = param.seriesPrices.get(self.buy_vol)
+            const sell_price = param.seriesPrices.get(self.sell_series)
+            const sell_vol = param.seriesPrices.get(self.sell_vol)
+            const tooltip_buy = document.getElementById('tooltip_buy')
+            const tooltip_sell = document.getElementById('tooltip_sell')
+
+            if(buy_price){
+                tooltip_buy.style.display = 'block'
+                tooltip_buy.style.left = param.point.x
+
+                var coordinate = self.buy_series.priceToCoordinate(buy_price);
+                tooltip_buy.style.top = coordinate
+                document.getElementById('buy_price').innerText = buy_price
+                document.getElementById('buy_vol').innerText = buy_vol
+            }
+            else{
+                tooltip_buy.style.display = 'none'
+            }
+            if(sell_price){
+                tooltip_sell.style.display = 'block'
+                tooltip_sell.style.left = param.point.x
+
+                var coordinate = self.sell_series.priceToCoordinate(sell_price);
+                tooltip_sell.style.top = coordinate
+
+                document.getElementById('sell_price').innerText = sell_price
+                document.getElementById('sell_vol').innerText = sell_vol
+            }
+            else{
+                tooltip_sell.style.display = 'none'
+            }
+        })
+
+        // subscribe visible time range change
+        self.chart.subscribeVisibleTimeRangeChange(function() {
+            var buttonVisible = self.chart.timeScale().scrollPosition() < 0;
+            document.getElementById('realtime').style.display = buttonVisible ? 'block' : 'none';
+        });
     }
 
     bftimetojst(exec_date){
@@ -127,6 +207,12 @@ class BitFlyerHFTChart {
                 self.sell_vol.update({time: t,value: m.size})
             }
         }
+        this.exchange.onticker = function(m){
+            const t = self.bftimetojst(m.timestamp)
+            self.bid_series.update({time: t,value: m.best_bid})
+            self.ask_series.update({time: t,value: m.best_ask})
+        }
+
         this.exchange.onorder = function(m){
             // Mark New Order
             if(m.side == "BUY"){
@@ -203,6 +289,7 @@ class BitFlyerExchange {
         const subscribe = function(){
             self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_board_snapshot_FX_BTC_JPY'}}))
             self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_board_FX_BTC_JPY'}}))
+            self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_ticker_FX_BTC_JPY'}}))
             self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_executions_FX_BTC_JPY'}}))
         }
         this.socket.onopen = function() {
@@ -257,6 +344,9 @@ class BitFlyerExchange {
                     }
                 )
                 break;
+            case "lightning_ticker_FX_BTC_JPY":
+                if(this.onticker) this.onticker(m);
+                break;
             case "lightning_board_FX_BTC_JPY":
                 this.mid_price = m.mid_price
                 m.bids.forEach( function(b){self.bids[b.price]=b.size;})
@@ -286,6 +376,14 @@ window.onload = function(){
 <body style='margin :0'>
 <div id='chart'>
 </div>
+<div id='tooltip_buy' style='pointer-events: none;position: absolute;z-index: 1000;right:300;color:#FFFFFF;'>
+    <div id='buy_price' style='color:#4BA375;'></div>
+    <div id='buy_vol' style='color:#4BA375;'></div>
+</div>
+<div id='tooltip_sell' style='pointer-events: none;position: absolute;z-index: 1000;right:300;color:#FFFFFF;'>
+    <div id='sell_price' style='color:#E54F6B;'></div>
+    <div id='sell_vol' style='color:#E54F6B;'></div>
+</div>
 <div id='setting' style='position: absolute;z-index: 1000'>
     <details style="color:#FFFFFF;background-color:rgba(255,255,255,0.1);padding:5px">
         <summary>Setting</summary>
@@ -296,5 +394,11 @@ window.onload = function(){
         </form>
     </details>
 </div>
+<div id='realtime' style='position: absolute;z-index: 1000;right:80;bottom:50%;color:#FFFFFF;cursor : pointer;'>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="50" height="50">
+        <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M6.5 1.5l5 5.5-5 5.5M3 4l2.5 3L3 10"></path>
+    </svg>
+</div>
+
 </body>
 </html>
