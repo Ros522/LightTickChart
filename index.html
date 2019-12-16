@@ -1,6 +1,7 @@
 <html>
 <head>
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://unpkg.com/avl"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/core.js" integrity="sha256-wPN6ojtZcdUXfbQ+nxh6Zm7xh1pOWxEbuE9EIa1P7BY=" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/sha256.js" integrity="sha256-2AdPI8vSeqbC8jG4va00u9jUnH5H/6DXzQeixNHTx5g=" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/hmac.min.js" integrity="sha256-egwF2x9ZneCwHP+C7Ju1K1Nfd2ntIX/X1KY6Dwioki4=" crossorigin="anonymous"></script>
@@ -70,9 +71,43 @@ class BitFlyerHFTChart {
                 },
             }
         );
+
+        this.contour_ask_series = new Array(5).fill(0).map((i,idx)=>{
+            const alpha = 1.0 - 0.2 * idx
+            return this.chart.addLineSeries(
+            {
+                lineWidth : 1,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                lastValueVisible: false,
+                priceLineVisible: false,
+                color : `rgba(75,163,117,${alpha})`,
+                scaleMargins: {
+                    top: 0,
+                    bottom: 0.8,
+                },
+            });
+        })
+
+        this.contour_bid_series = new Array(5).fill(0).map((i,idx)=>{
+            const alpha = 1.0 - 0.2 * idx
+            return this.chart.addLineSeries(
+            {
+                lineWidth : 1,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                lastValueVisible: false,
+                priceLineVisible: false,
+                color : `rgba(229,79,107,${alpha})`,
+                scaleMargins: {
+                    top: 0,
+                    bottom: 0.8,
+                },
+            });
+        })
+        
+
         this.buy_series = this.chart.addLineSeries(
             {
-                lineWidth : 2,
+                lineWidth : 3,
                 color : '#4BA375',
                 scaleMargins: {
                     top: 0,
@@ -83,7 +118,7 @@ class BitFlyerHFTChart {
 
         this.sell_series = this.chart.addLineSeries(
             {
-                lineWidth : 2,
+                lineWidth : 3,
                 color : '#E54F6B',
                 scaleMargins: {
                     top: 0,
@@ -193,7 +228,7 @@ class BitFlyerHFTChart {
         const t = d.getTime() / 1000 - d.getTimezoneOffset()*60 // UTC to JST
         return t
     }
-    
+
     create(){
         const self = this
         this.exchange.onexecution = function(m){
@@ -211,6 +246,44 @@ class BitFlyerHFTChart {
             const t = self.bftimetojst(m.timestamp)
             self.bid_series.update({time: t,value: m.best_bid})
             self.ask_series.update({time: t,value: m.best_ask})
+
+            // contour series
+            // contour FIXME: CUMSUM LOGIC?
+            if(self.exchange.board_ready)
+            {
+                let vol=0;
+                let keys = self.exchange.asks.keys();
+                for(let i=0;i<=keys.length;i++)
+                {
+                    const node = self.exchange.asks.find(keys[i])
+                    vol += node.data;
+                    // vol to series index
+                    const series_idx = Math.ceil(vol / 1); // 1line per 1 btc
+                    if( series_idx in self.contour_ask_series)
+                    {
+                        self.contour_ask_series[series_idx].update({time: t,value: node.key})
+                    }else{
+                        break
+                    }
+                }
+
+                vol=0;
+                keys = self.exchange.bids.keys();
+                for(let i=0;i<=keys.length;i++)
+                {
+                    const node = self.exchange.bids.find(keys[i])
+                    vol += node.data;
+                    // vol to series index
+                    const series_idx = Math.ceil(vol / 1); // 1line per 1 btc
+                    if( series_idx in self.contour_bid_series)
+                    {
+                        self.contour_bid_series[series_idx].update({time: t,value: node.key})
+                    }else{
+                        break
+                    }
+                }
+            }
+            
         }
 
         this.exchange.onorder = function(m){
@@ -262,13 +335,14 @@ class BitFlyerHFTChart {
 class BitFlyerExchange {
     constructor(){
         this.mid_price = 0
-        this.asks = []
-        this.bids = []
+        this.asks = new AVLTree((a, b) => a - b,true);
+        this.bids = new AVLTree((a, b) => b - a,true);
 
         this.onboard = null
         this.onexecution = null
         this.api_key = ''
         this.secret = ''
+        this.board_ready = false
     }
 
     get_auth_params(api_key,secret) {
@@ -288,7 +362,6 @@ class BitFlyerExchange {
         this.socket = new WebSocket("wss://ws.lightstream.bitflyer.com/json-rpc");
         const subscribe = function(){
             self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_board_snapshot_FX_BTC_JPY'}}))
-            self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_board_FX_BTC_JPY'}}))
             self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_ticker_FX_BTC_JPY'}}))
             self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_executions_FX_BTC_JPY'}}))
         }
@@ -316,6 +389,16 @@ class BitFlyerExchange {
     enable_private_ch(key,secret){
         if(this.socket)
             this.socket.send( JSON.stringify({id:1,method:"auth",params:this.get_auth_params(key,secret)}))
+    }
+
+    update_board(tree,board){
+        self.mid_price = board.mid_price;
+        board.forEach( function(b){
+            if(b.size == 0)
+                tree.remove(b.price)
+            else
+                tree.insert(b.price,b.size)
+        ;})
     }
 
     on_receive_message(f){
@@ -347,10 +430,17 @@ class BitFlyerExchange {
             case "lightning_ticker_FX_BTC_JPY":
                 if(this.onticker) this.onticker(m);
                 break;
+            case "lightning_board_snapshot_FX_BTC_JPY":
+                self.update_board(self.bids,m.bids)
+                self.update_board(self.asks,m.asks)
+                self.socket.send( JSON.stringify({method:"unsubscribe",params:{channel:'lightning_board_snapshot_FX_BTC_JPY'}}))
+                self.socket.send( JSON.stringify({method:"subscribe",params:{channel:'lightning_board_FX_BTC_JPY'}}))
+                self.board_ready = true
+                break;
+
             case "lightning_board_FX_BTC_JPY":
-                this.mid_price = m.mid_price
-                m.bids.forEach( function(b){self.bids[b.price]=b.size;})
-                m.asks.forEach( function(b){self.asks[b.price]=b.size;})
+                self.update_board(self.bids,m.bids)
+                self.update_board(self.asks,m.asks)
                 if(this.onboard) this.onboard(m);
                 break;
             case "lightning_executions_FX_BTC_JPY":
