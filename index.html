@@ -231,6 +231,30 @@ class BitFlyerHFTChart {
 
     create(){
         const self = this
+        
+        const update_contour = function( time,series , board ){
+            let vol=0;
+            let keys = board.keys();
+            let next_idx = 0
+            
+            for(let i=0;i<=keys.length;i++)
+            {
+                const node = board.find(keys[i])
+                vol += node.data;
+                // vol to series index
+                const series_idx = Math.floor(vol / 1) - 1; // 1line per 1 btc
+                if(next_idx <= series_idx){
+                    while( next_idx <= series_idx )
+                    {
+                        if(!(next_idx in series))
+                            return
+                        series[next_idx].update({time: time,value: node.key})
+                        next_idx += 1
+                    }
+                }
+            }
+        }
+
         this.exchange.onexecution = function(m){
             const t = self.bftimetojst(m.exec_date)
             if (m.side == 'BUY'){
@@ -241,47 +265,26 @@ class BitFlyerHFTChart {
                 self.sell_series.update({time: t,value: m.price});  
                 self.sell_vol.update({time: t,value: m.size})
             }
+            
+            // contour series
+            if(self.exchange.board_ready)
+            {
+                update_contour(t,self.contour_ask_series,self.exchange.asks)
+                update_contour(t,self.contour_bid_series,self.exchange.bids)
+            }
         }
+
+
         this.exchange.onticker = function(m){
             const t = self.bftimetojst(m.timestamp)
             self.bid_series.update({time: t,value: m.best_bid})
             self.ask_series.update({time: t,value: m.best_ask})
-
+            
             // contour series
-            // contour FIXME: CUMSUM LOGIC?
             if(self.exchange.board_ready)
             {
-                let vol=0;
-                let keys = self.exchange.asks.keys();
-                for(let i=0;i<=keys.length;i++)
-                {
-                    const node = self.exchange.asks.find(keys[i])
-                    vol += node.data;
-                    // vol to series index
-                    const series_idx = Math.ceil(vol / 1); // 1line per 1 btc
-                    if( series_idx in self.contour_ask_series)
-                    {
-                        self.contour_ask_series[series_idx].update({time: t,value: node.key})
-                    }else{
-                        break
-                    }
-                }
-
-                vol=0;
-                keys = self.exchange.bids.keys();
-                for(let i=0;i<=keys.length;i++)
-                {
-                    const node = self.exchange.bids.find(keys[i])
-                    vol += node.data;
-                    // vol to series index
-                    const series_idx = Math.ceil(vol / 1); // 1line per 1 btc
-                    if( series_idx in self.contour_bid_series)
-                    {
-                        self.contour_bid_series[series_idx].update({time: t,value: node.key})
-                    }else{
-                        break
-                    }
-                }
+                update_contour(t,self.contour_ask_series,self.exchange.asks)
+                update_contour(t,self.contour_bid_series,self.exchange.bids)
             }
             
         }
