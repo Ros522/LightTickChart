@@ -163,6 +163,8 @@ class BitFlyerHFTChart {
 
         this.markers = []
         this.orders_line = {}
+        
+        this.last_time = 0
         // resize to window size
         window.onresize = function(){
             self.chart.resize( self.dom.clientHeight, self.dom.clientWidth)
@@ -217,7 +219,7 @@ class BitFlyerHFTChart {
         })
 
         // subscribe visible time range change
-        self.chart.subscribeVisibleTimeRangeChange(function() {
+        self.chart.timeScale().subscribeVisibleTimeRangeChange(function() {
             var buttonVisible = self.chart.timeScale().scrollPosition() < 0;
             document.getElementById('realtime').style.display = buttonVisible ? 'block' : 'none';
         });
@@ -267,10 +269,11 @@ class BitFlyerHFTChart {
             }
             
             // contour series
-            if(self.exchange.board_ready)
+            if(self.exchange.board_ready && self.last_time < t)
             {
                 update_contour(t,self.contour_ask_series,self.exchange.asks)
                 update_contour(t,self.contour_bid_series,self.exchange.bids)
+                self.last_time = t
             }
         }
 
@@ -281,22 +284,26 @@ class BitFlyerHFTChart {
             self.ask_series.update({time: t,value: m.best_ask})
             
             // contour series
-            if(self.exchange.board_ready)
+            if(self.exchange.board_ready && self.last_time < t)
             {
                 update_contour(t,self.contour_ask_series,self.exchange.asks)
                 update_contour(t,self.contour_bid_series,self.exchange.bids)
+                self.last_time = t
             }
-            
         }
 
         this.exchange.onorder = function(m){
             // Mark New Order
             if(m.side == "BUY"){
                 self.orders_line[m.child_order_id] = self.my_exec_series.createPriceLine({color:'#4BA375',price: m.price,outbound_size:new Decimal(m.size),lineStyle: LightweightCharts.LineStyle.LargeDashed}); 
+                self.orders_line[m.child_order_id].price = m.price
+                self.orders_line[m.child_order_id].outbound_size = new Decimal(m.size)
             }
             if(m.side == "SELL")
             {
                 self.orders_line[m.child_order_id] = self.my_exec_series.createPriceLine({color:'#E54F6B',price: m.price,outbound_size:new Decimal(m.size),lineStyle: LightweightCharts.LineStyle.LargeDashed}); 
+                self.orders_line[m.child_order_id].price = m.price
+                self.orders_line[m.child_order_id].outbound_size = new Decimal(m.size)
             }
         }
         this.exchange.oncancel = function(m){
@@ -315,8 +322,8 @@ class BitFlyerHFTChart {
 
             // Execution completed check
             if (m.child_order_id in self.orders_line){
-                self.orders_line[m.child_order_id].ii.K.outbound_size = self.orders_line[m.child_order_id].ii.K.outbound_size.sub( new Decimal(m.size) )
-                if( self.orders_line[m.child_order_id].ii.K.outbound_size.equals( new Decimal(0) )){
+                self.orders_line[m.child_order_id].outbound_size = self.orders_line[m.child_order_id].outbound_size.sub( new Decimal(m.size) )
+                if( self.orders_line[m.child_order_id].outbound_size.equals( new Decimal(0) )){
                     // completed
                     self.my_exec_series.removePriceLine( self.orders_line[m.child_order_id] )
                     delete self.orders_line[ m.child_order_id ]
